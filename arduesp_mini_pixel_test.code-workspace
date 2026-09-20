@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../../../Desktop/MiniPixel/arduesp_mini_pixel_test"
+		},
+		{
+			"name": "MINI_ARD",
+			"path": "."
+		}
+	],
+	"settings": {
+		"stm32cube-ide-clangd.path": "cube"
+	}
+}
