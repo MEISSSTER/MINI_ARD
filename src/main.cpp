@@ -1,328 +1,304 @@
 /*
+ Example animated analogue meters using a TFT LCD screen
 
-  This program provides cartesian type graph function
+ Originanally written for a 320 x 240 display, so only occupies half
+ of a 480 x 320 display.
 
-  Revisions
-  rev     date        author      description
-  1       12-24-2015  kasprzak    initial creation
+ Needs Font 2 (also Font 4 if using large centered scale label)
 
-  Updated by Bodmer to be an example for the library here:
-  https://github.com/Bodmer/TFT_eSPI
-  
-*/
+  #########################################################################
+  ###### DON'T FORGET TO UPDATE THE User_Setup.h FILE IN THE LIBRARY ######
+  #########################################################################
+ */
 
-#include <TFT_eSPI.h> // Hardware-specific library
 #include <SPI.h>
 
-TFT_eSPI tft = TFT_eSPI();                   // Invoke custom library with default width and height
+#include <TFT_eSPI.h> // Hardware-specific library
 
+TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
 
-#define LTBLUE    0xB6DF
-#define LTTEAL    0xBF5F
-#define LTGREEN   0xBFF7
-#define LTCYAN    0xC7FF
-#define LTRED     0xFD34
-#define LTMAGENTA 0xFD5F
-#define LTYELLOW  0xFFF8
-#define LTORANGE  0xFE73
-#define LTPINK    0xFDDF
-#define LTPURPLE  0xCCFF
-#define LTGREY    0xE71C
+#define TFT_GREY 0x5AEB
 
-#define BLUE      0x001F
-#define TEAL      0x0438
-#define GREEN     0x07E0
-#define CYAN      0x07FF
-#define RED       0xF800
-#define MAGENTA   0xF81F
-#define YELLOW    0xFFE0
-#define ORANGE    0xFC00
-#define PINK      0xF81F
-#define PURPLE    0x8010
-#define GREY      0xC618
-#define WHITE     0xFFFF
-#define BLACK     0x0000
+float ltx = 0;    // Saved x coord of bottom of needle
+uint16_t osx = 120, osy = 120; // Saved x & y coords
+uint32_t updateTime = 0;       // time for next update
 
-#define DKBLUE    0x000D
-#define DKTEAL    0x020C
-#define DKGREEN   0x03E0
-#define DKCYAN    0x03EF
-#define DKRED     0x6000
-#define DKMAGENTA 0x8008
-#define DKYELLOW  0x8400
-#define DKORANGE  0x8200
-#define DKPINK    0x9009
-#define DKPURPLE  0x4010
-#define DKGREY    0x4A49
+int old_analog =  -999; // Value last displayed
+int old_digital = -999; // Value last displayed
 
-// these are the only external variables used by the graph function
-// it's a flag to draw the coordinate system only on the first call to the Graph() function
-// and will mimize flicker
-// also create some variables to store the old x and y, if you draw 2 graphs on the same display
-// you will need to store ox and oy per each display
-bool display1 = true;
-bool update1 = true;
+int value[6] = {0, 0, 0, 0, 0, 0};
+int old_value[6] = { -1, -1, -1, -1, -1, -1};
+int d = 0;
 
-double ox = -999, oy = -999; // Force them to be off screen
+void analogMeter();
+void plotLinear(const char *label, int x, int y);
+void plotPointer(void);
+void plotNeedle(int value, byte ms_delay);
 
-/*
-
-  function to draw a cartesian coordinate system and plot whatever data you want
-  just pass x and y and the graph will be drawn
-
-  huge arguement list
-  &d name of your display object
-  x = x data point
-  y = y datapont
-  gx = x graph location (lower left)
-  gy = y graph location (lower left)
-  w = width of graph
-  h = height of graph
-  xlo = lower bound of x axis
-  xhi = upper bound of x asis
-  xinc = division of x axis (distance not count)
-  ylo = lower bound of y axis
-  yhi = upper bound of y asis
-  yinc = division of y axis (distance not count)
-  title = title of graph
-  xlabel = x asis label
-  ylabel = y asis label
-  &redraw = flag to redraw graph on first call only
-  color = plotted trace colour
-*/
-
-
-void Graph(TFT_eSPI &tft, double x, double y, byte dp,
-                           double gx, double gy, double w, double h,
-                           double xlo, double xhi, double xinc,
-                           double ylo, double yhi, double yinc,
-                           char *title, char *xlabel, char *ylabel,
-                           bool &redraw, unsigned int color) {
-
-  double ydiv, xdiv;
-  double i;
-  double temp;
-  int rot, newrot;
-
-  // gcolor = graph grid colors
-  // acolor = axes line colors
-  // pcolor = color of your plotted data
-  // tcolor = text color
-  // bcolor = background color
-  unsigned int gcolor = DKBLUE;
-  unsigned int acolor = RED;
-  unsigned int pcolor = color;
-  unsigned int tcolor = WHITE;
-  unsigned int bcolor = BLACK;
-
-  if (redraw == true) {
-
-    redraw = false;
-    // initialize old x and old y in order to draw the first point of the graph
-    // but save the transformed value
-    // note my transform funcition is the same as the map function, except the map uses long and we need doubles
-    //ox = (x - xlo) * ( w) / (xhi - xlo) + gx;
-    //oy = (y - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-
-    tft.setTextDatum(MR_DATUM);
-
-    // draw y scale
-    for ( i = ylo; i <= yhi; i += yinc) {
-      // compute the transform
-      temp =  (i - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-
-      if (i == 0) {
-        tft.drawLine(gx, temp, gx + w, temp, acolor);
-        tft.setTextColor(acolor, bcolor);
-        tft.drawString(xlabel, (int)(gx + w) , (int)temp, 2);
-      }
-      else {
-        tft.drawLine(gx, temp, gx + w, temp, gcolor);
-      }
-      // draw the axis labels
-      tft.setTextColor(tcolor, bcolor);
-      // precision is default Arduino--this could really use some format control
-      tft.drawFloat(i, dp, gx - 4, temp, 1);
-    }
-
-    // draw x scale
-    for (i = xlo; i <= xhi; i += xinc) {
-
-      // compute the transform
-      temp =  (i - xlo) * ( w) / (xhi - xlo) + gx;
-      if (i == 0) {
-        tft.drawLine(temp, gy, temp, gy - h, acolor);
-        tft.setTextColor(acolor, bcolor);
-        tft.setTextDatum(BC_DATUM);
-        tft.drawString(ylabel, (int)temp, (int)(gy - h - 8) , 2);
-      }
-      else {
-        tft.drawLine(temp, gy, temp, gy - h, gcolor);
-      }
-      // draw the axis labels
-      tft.setTextColor(tcolor, bcolor);
-      tft.setTextDatum(TC_DATUM);
-      // precision is default Arduino--this could really use some format control
-      tft.drawFloat(i, dp, temp, gy + 7, 1);
-    }
-
-    //now draw the graph labels
-    tft.setTextColor(tcolor, bcolor);
-    tft.drawString(title, (int)(gx + w / 2) , (int)(gy - h - 30), 4);
-  }
-
-  // the coordinates are now drawn, plot the data
-  // the entire plotting code are these few lines...
-  // recall that ox and oy are initialized above
-  //x =  (x - xlo) * ( w) / (xhi - xlo) + gx;
-  //y =  (y - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-  //tft.drawLine(ox, oy, x, y, pcolor);
-  // it's up to you but drawing 2 more lines to give the graph some thickness
-  //tft.drawLine(ox, oy + 1, x, y + 1, pcolor);
-  //tft.drawLine(ox, oy - 1, x, y - 1, pcolor);
-  //ox = x;
-  //oy = y;
-
-}
-
-void Trace(TFT_eSPI &tft, double x,  double y,  byte dp,
-           double gx, double gy,
-           double w, double h,
-           double xlo, double xhi, double xinc,
-           double ylo, double yhi, double yinc,
-           char *title, char *xlabel, char *ylabel,
-           bool &update1, unsigned int color)
-{
-  double ydiv, xdiv;
-  double i;
-  double temp;
-  int rot, newrot;
-
-  //unsigned int gcolor = DKBLUE;   // gcolor = graph grid color
-  unsigned int acolor = RED;        // acolor = main axes and label color
-  unsigned int pcolor = color;      // pcolor = color of your plotted data
-  unsigned int tcolor = WHITE;      // tcolor = text color
-  unsigned int bcolor = BLACK;      // bcolor = background color
-
-  // initialize old x and old y in order to draw the first point of the graph
-  // but save the transformed value
-  // note my transform funcition is the same as the map function, except the map uses long and we need doubles
-  if (update1) {
-    update1 = false;
-    
-    ox = (x - xlo) * ( w) / (xhi - xlo) + gx;
-    oy = (y - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-
-    if ((ox < gx) || (ox > gx+w)) {update1 = true; return;}
-    if ((oy < gy-h) || (oy > gy)) {update1 = true; return;}
-    
-
-    tft.setTextDatum(MR_DATUM);
-
-    // draw y scale
-    for ( i = ylo; i <= yhi; i += yinc) {
-      // compute the transform
-      temp =  (i - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-
-      if (i == 0) {
-        tft.setTextColor(acolor, bcolor);
-        tft.drawString(xlabel, (int)(gx + w) , (int)temp, 2);
-      }
-      // draw the axis labels
-      tft.setTextColor(tcolor, bcolor);
-      // precision is default Arduino--this could really use some format control
-      tft.drawFloat(i, dp, gx - 4, temp, 1);
-    }
-
-    // draw x scale
-    for (i = xlo; i <= xhi; i += xinc) {
-
-      // compute the transform
-      temp =  (i - xlo) * ( w) / (xhi - xlo) + gx;
-      if (i == 0) {
-        tft.setTextColor(acolor, bcolor);
-        tft.setTextDatum(BC_DATUM);
-        tft.drawString(ylabel, (int)temp, (int)(gy - h - 8) , 2);
-      }
-
-      // draw the axis labels
-      tft.setTextColor(tcolor, bcolor);
-      tft.setTextDatum(TC_DATUM);
-      // precision is default Arduino--this could really use some format control
-      tft.drawFloat(i, dp, temp, gy + 7, 1);
-    }
-
-    //now draw the graph labels
-    tft.setTextColor(tcolor, bcolor);
-    tft.drawString(title, (int)(gx + w / 2) , (int)(gy - h - 30), 4);
-  }
-
-  // the coordinates are now drawn, plot the data
-  // the entire plotting code are these few lines...
-  // recall that ox and oy are initialized above
-  x =  (x - xlo) * ( w) / (xhi - xlo) + gx;
-  y =  (y - ylo) * (gy - h - gy) / (yhi - ylo) + gy;
-
-  if ((x < gx) || (x > gx+w)) {update1 = true; return;}
-  if ((y < gy-h) || (y > gy)) {update1 = true; return;}
-    
-    
-  tft.drawLine(ox, oy, x, y, pcolor);
-  // it's up to you but drawing 2 more lines to give the graph some thickness
-  //tft.drawLine(ox, oy + 1, x, y + 1, pcolor);
-  //tft.drawLine(ox, oy - 1, x, y - 1, pcolor);
-  ox = x;
-  oy = y;
-
-}
-
-/*
-
-  End of graphing function
-
-*/
-
-
-
-void setup() {
-  double x, y;
-
-  tft.begin();
-  tft.fillScreen(BLACK);
+void setup(void) {
+  tft.init();
   tft.setRotation(1);
+  Serial.begin(57600); // For debug
+  tft.fillScreen(TFT_BLACK);
 
-  Graph(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "", "", "", display1, YELLOW);
+  analogMeter(); // Draw analogue meter
 
-  //delay(1000);
-  
-  update1 = true;
-  for (x = 0; x <= 6.3; x += .1) {
-    y = sin(x);
-    Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x)", "x", "fn(x)", update1, YELLOW);
-  }
+  // Draw 6 linear meters
+  byte d = 40;
+  plotLinear("A0", 0, 160);
+  plotLinear("A1", 1 * d, 160);
+  plotLinear("A2", 2 * d, 160);
+  plotLinear("A3", 3 * d, 160);
+  plotLinear("A4", 4 * d, 160);
+  plotLinear("A5", 5 * d, 160);
 
-  delay(2000);
+  updateTime = millis(); // Next update time
+}
 
-  update1 = true;
-  for (x = 0; x <= 6.3; x += .1) {
-    y = cos(x);
-    Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x) + Cos(x)", " x", "fn(x)", update1, TFT_PINK);
-  }
 
-  delay(2000);
-  
-  update1 = true;
-  for (x = 0; x <= 6.3; x += .02) {
-    y = tan(x);
-    Trace(tft, x, y, 1, 60, 290, 390, 260, 0, 6.5, 1, -1, 1, .25, "Sin(x) + Cos(x) + Tan(x)", " x", "fn(x)", update1, CYAN);
+void loop() {
+  if (updateTime <= millis()) {
+    updateTime = millis() + 25; // Delay to limit speed of update
+ 
+    d += 4; if (d >= 360) d = 0;
+
+    //value[0] = map(analogRead(A0), 0, 1023, 0, 100); // Test with value form Analogue 0
+    //value[1] = map(analogRead(A1), 0, 1023, 0, 100); // Test with value form Analogue 1
+    //value[2] = map(analogRead(A2), 0, 1023, 0, 100); // Test with value form Analogue 2
+    //value[3] = map(analogRead(A3), 0, 1023, 0, 100); // Test with value form Analogue 3
+    //value[4] = map(analogRead(A4), 0, 1023, 0, 100); // Test with value form Analogue 4
+    //value[5] = map(analogRead(A5), 0, 1023, 0, 100); // Test with value form Analogue 5
+
+    // Create a Sine wave for testing
+    value[0] = 50 + 50 * sin((d + 0) * 0.0174532925);
+    value[1] = 50 + 50 * sin((d + 60) * 0.0174532925);
+    value[2] = 50 + 50 * sin((d + 120) * 0.0174532925);
+    value[3] = 50 + 50 * sin((d + 180) * 0.0174532925);
+    value[4] = 50 + 50 * sin((d + 240) * 0.0174532925);
+    value[5] = 50 + 50 * sin((d + 300) * 0.0174532925);
+    
+    //unsigned long t = millis(); 
+    plotPointer(); // It takes aout 3.5ms to plot each gauge for a 1 pixel move, 21ms for 6 gauges
+     
+    plotNeedle(value[0], 0); // It takes between 2 and 12ms to replot the needle with zero delay
+    //Serial.println(millis()-t); // Print time taken for meter update
   }
 }
 
 
-void loop(void) {
+// #########################################################################
+//  Draw the analogue meter on the screen
+// #########################################################################
+void analogMeter()
+{
+  // Meter outline
+  tft.fillRect(0, 0, 239, 126, TFT_GREY);
+  tft.fillRect(5, 3, 230, 119, TFT_WHITE);
 
+  tft.setTextColor(TFT_BLACK);  // Text colour
+
+  // Draw ticks every 5 degrees from -50 to +50 degrees (100 deg. FSD swing)
+  for (int i = -50; i < 51; i += 5) {
+    // Long scale tick length
+    int tl = 15;
+
+    // Coordinates of tick to draw
+    float sx = cos((i - 90) * 0.0174532925);
+    float sy = sin((i - 90) * 0.0174532925);
+    uint16_t x0 = sx * (100 + tl) + 120;
+    uint16_t y0 = sy * (100 + tl) + 140;
+    uint16_t x1 = sx * 100 + 120;
+    uint16_t y1 = sy * 100 + 140;
+
+    // Coordinates of next tick for zone fill
+    float sx2 = cos((i + 5 - 90) * 0.0174532925);
+    float sy2 = sin((i + 5 - 90) * 0.0174532925);
+    int x2 = sx2 * (100 + tl) + 120;
+    int y2 = sy2 * (100 + tl) + 140;
+    int x3 = sx2 * 100 + 120;
+    int y3 = sy2 * 100 + 140;
+
+    // Yellow zone limits
+    //if (i >= -50 && i < 0) {
+    //  tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_YELLOW);
+    //  tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_YELLOW);
+    //}
+
+    // Green zone limits
+    if (i >= 0 && i < 25) {
+      tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_GREEN);
+      tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_GREEN);
+    }
+
+    // Orange zone limits
+    if (i >= 25 && i < 50) {
+      tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_ORANGE);
+      tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_ORANGE);
+    }
+
+    // Short scale tick length
+    if (i % 25 != 0) tl = 8;
+
+    // Recalculate coords incase tick lenght changed
+    x0 = sx * (100 + tl) + 120;
+    y0 = sy * (100 + tl) + 140;
+    x1 = sx * 100 + 120;
+    y1 = sy * 100 + 140;
+
+    // Draw tick
+    tft.drawLine(x0, y0, x1, y1, TFT_BLACK);
+
+    // Check if labels should be drawn, with position tweaks
+    if (i % 25 == 0) {
+      // Calculate label positions
+      x0 = sx * (100 + tl + 10) + 120;
+      y0 = sy * (100 + tl + 10) + 140;
+      switch (i / 25) {
+        case -2: tft.drawCentreString("0", x0, y0 - 12, 2); break;
+        case -1: tft.drawCentreString("25", x0, y0 - 9, 2); break;
+        case 0: tft.drawCentreString("50", x0, y0 - 6, 2); break;
+        case 1: tft.drawCentreString("75", x0, y0 - 9, 2); break;
+        case 2: tft.drawCentreString("100", x0, y0 - 12, 2); break;
+      }
+    }
+
+    // Now draw the arc of the scale
+    sx = cos((i + 5 - 90) * 0.0174532925);
+    sy = sin((i + 5 - 90) * 0.0174532925);
+    x0 = sx * 100 + 120;
+    y0 = sy * 100 + 140;
+    // Draw scale arc, don't draw the last part
+    if (i < 50) tft.drawLine(x0, y0, x1, y1, TFT_BLACK);
+  }
+
+  tft.drawString("%RH", 5 + 230 - 40, 119 - 20, 2); // Units at bottom right
+  tft.drawCentreString("%RH", 120, 70, 4); // Comment out to avoid font 4
+  tft.drawRect(5, 3, 230, 119, TFT_BLACK); // Draw bezel line
+
+  plotNeedle(0, 0); // Put meter needle at 0
 }
 
+// #########################################################################
+// Update needle position
+// This function is blocking while needle moves, time depends on ms_delay
+// 10ms minimises needle flicker if text is drawn within needle sweep area
+// Smaller values OK if text not in sweep area, zero for instant movement but
+// does not look realistic... (note: 100 increments for full scale deflection)
+// #########################################################################
+void plotNeedle(int value, byte ms_delay)
+{
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  char buf[8]; dtostrf(value, 4, 0, buf);
+  tft.drawRightString(buf, 40, 119 - 20, 2);
 
+  if (value < -10) value = -10; // Limit value to emulate needle end stops
+  if (value > 110) value = 110;
 
+  // Move the needle util new value reached
+  while (!(value == old_analog)) {
+    if (old_analog < value) old_analog++;
+    else old_analog--;
+
+    if (ms_delay == 0) old_analog = value; // Update immediately id delay is 0
+
+    float sdeg = map(old_analog, -10, 110, -150, -30); // Map value to angle
+    // Calculate tip of needle coords
+    float sx = cos(sdeg * 0.0174532925);
+    float sy = sin(sdeg * 0.0174532925);
+
+    // Calculate x delta of needle start (does not start at pivot point)
+    float tx = tan((sdeg + 90) * 0.0174532925);
+
+    // Erase old needle image
+    tft.drawLine(120 + 20 * ltx - 1, 140 - 20, osx - 1, osy, TFT_WHITE);
+    tft.drawLine(120 + 20 * ltx, 140 - 20, osx, osy, TFT_WHITE);
+    tft.drawLine(120 + 20 * ltx + 1, 140 - 20, osx + 1, osy, TFT_WHITE);
+
+    // Re-plot text under needle
+    tft.setTextColor(TFT_BLACK);
+    tft.drawCentreString("%RH", 120, 70, 4); // // Comment out to avoid font 4
+
+    // Store new needle end coords for next erase
+    ltx = tx;
+    osx = sx * 98 + 120;
+    osy = sy * 98 + 140;
+
+    // Draw the needle in the new postion, magenta makes needle a bit bolder
+    // draws 3 lines to thicken needle
+    tft.drawLine(120 + 20 * ltx - 1, 140 - 20, osx - 1, osy, TFT_RED);
+    tft.drawLine(120 + 20 * ltx, 140 - 20, osx, osy, TFT_MAGENTA);
+    tft.drawLine(120 + 20 * ltx + 1, 140 - 20, osx + 1, osy, TFT_RED);
+
+    // Slow needle down slightly as it approaches new postion
+    if (abs(old_analog - value) < 10) ms_delay += ms_delay / 5;
+
+    // Wait before next update
+    delay(ms_delay);
+  }
+}
+
+// #########################################################################
+//  Draw a linear meter on the screen
+// #########################################################################
+void plotLinear(const char *label, int x, int y)
+{
+  int w = 36;
+  tft.drawRect(x, y, w, 155, TFT_GREY);
+  tft.fillRect(x+2, y + 19, w-3, 155 - 38, TFT_WHITE);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.drawCentreString(label, x + w / 2, y + 2, 2);
+
+  for (int i = 0; i < 110; i += 10)
+  {
+    tft.drawFastHLine(x + 20, y + 27 + i, 6, TFT_BLACK);
+  }
+
+  for (int i = 0; i < 110; i += 50)
+  {
+    tft.drawFastHLine(x + 20, y + 27 + i, 9, TFT_BLACK);
+  }
+  
+  tft.fillTriangle(x+3, y + 127, x+3+16, y+127, x + 3, y + 127 - 5, TFT_RED);
+  tft.fillTriangle(x+3, y + 127, x+3+16, y+127, x + 3, y + 127 + 5, TFT_RED);
+  
+  tft.drawCentreString("---", x + w / 2, y + 155 - 18, 2);
+}
+
+// #########################################################################
+//  Adjust 6 linear meter pointer positions
+// #########################################################################
+void plotPointer(void)
+{
+  int dy = 187;
+  byte pw = 16;
+
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+
+  // Move the 6 pointers one pixel towards new value
+  for (int i = 0; i < 6; i++)
+  {
+    char buf[8]; dtostrf(value[i], 4, 0, buf);
+    tft.drawRightString(buf, i * 40 + 36 - 5, 187 - 27 + 155 - 18, 2);
+
+    int dx = 3 + 40 * i;
+    if (value[i] < 0) value[i] = 0; // Limit value to emulate needle end stops
+    if (value[i] > 100) value[i] = 100;
+
+    while (!(value[i] == old_value[i])) {
+      dy = 187 + 100 - old_value[i];
+      if (old_value[i] > value[i])
+      {
+        tft.drawLine(dx, dy - 5, dx + pw, dy, TFT_WHITE);
+        old_value[i]--;
+        tft.drawLine(dx, dy + 6, dx + pw, dy + 1, TFT_RED);
+      }
+      else
+      {
+        tft.drawLine(dx, dy + 5, dx + pw, dy, TFT_WHITE);
+        old_value[i]++;
+        tft.drawLine(dx, dy - 6, dx + pw, dy - 1, TFT_RED);
+      }
+    }
+  }
+}
 
